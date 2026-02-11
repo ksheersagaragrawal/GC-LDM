@@ -135,7 +135,7 @@ if __name__ == '__main__':
     
                 for slice_index in range(3):
                     start_index = slice_index * 160000
-                    end_index = start_index + 16000
+                    end_index = start_index + 160000
             
                     # Minimum 9.9 seconds of audio required for safety
                     available_samples = total_samples - start_index
