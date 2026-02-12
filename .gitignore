@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+data/__pycache__/
+.DS_Store
+data/.DS_Store
+
+# local audio/test artifacts
+sanity_test_output/
+recon_audio/
+
+# local sample clips
+data/100/

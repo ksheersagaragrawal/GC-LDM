@@ -1,6 +1,5 @@
 import os
 import torch
-import torchaudio
 import pandas as pd
 import numpy as np
 import librosa
@@ -8,6 +7,68 @@ from diffusers import AutoencoderKL
 from torch.utils.data import Dataset
 from tqdm import tqdm
 import json
+from scipy.signal import get_window
+from librosa.util import pad_center
+from librosa.filters import mel as librosa_mel_fn
+
+
+# ── AudioLDM's actual STFT + Mel (from haoheliu/AudioLDM repo) ──
+class AudioLDM_STFT(torch.nn.Module):
+    def __init__(self, filter_length, hop_length, win_length, window="hann"):
+        super().__init__()
+        self.filter_length = filter_length
+        self.hop_length = hop_length
+        scale = filter_length / hop_length
+        fourier_basis = np.fft.fft(np.eye(filter_length))
+        cutoff = int(filter_length / 2 + 1)
+        fourier_basis = np.vstack(
+            [np.real(fourier_basis[:cutoff, :]), np.imag(fourier_basis[:cutoff, :])]
+        )
+        forward_basis = torch.FloatTensor(fourier_basis[:, None, :])
+        inverse_basis = torch.FloatTensor(np.linalg.pinv(scale * fourier_basis).T[:, None, :])
+        fft_window = get_window(window, win_length, fftbins=True)
+        fft_window = pad_center(fft_window, size=filter_length)
+        fft_window = torch.from_numpy(fft_window).float()
+        forward_basis *= fft_window
+        inverse_basis *= fft_window
+        self.register_buffer("forward_basis", forward_basis.float())
+        self.register_buffer("inverse_basis", inverse_basis.float())
+
+    def transform(self, input_data):
+        num_batches = input_data.size(0)
+        num_samples = input_data.size(1)
+        input_data = input_data.view(num_batches, 1, num_samples)
+        input_data = torch.nn.functional.pad(
+            input_data.unsqueeze(1),
+            (int(self.filter_length / 2), int(self.filter_length / 2), 0, 0),
+            mode="reflect",
+        )
+        input_data = input_data.squeeze(1)
+        forward_transform = torch.nn.functional.conv1d(
+            input_data, self.forward_basis, stride=self.hop_length, padding=0,
+        )
+        cutoff = int(self.filter_length / 2 + 1)
+        real_part = forward_transform[:, :cutoff, :]
+        imag_part = forward_transform[:, cutoff:, :]
+        magnitude = torch.sqrt(real_part ** 2 + imag_part ** 2)
+        return magnitude
+
+
+class TacotronSTFT(torch.nn.Module):
+    def __init__(self, filter_length, hop_length, win_length, n_mel_channels,
+                 sampling_rate, mel_fmin, mel_fmax):
+        super().__init__()
+        self.stft_fn = AudioLDM_STFT(filter_length, hop_length, win_length)
+        mel_basis = librosa_mel_fn(sr=sampling_rate, n_fft=filter_length,
+                                    n_mels=n_mel_channels, fmin=mel_fmin, fmax=mel_fmax)
+        self.register_buffer("mel_basis", torch.from_numpy(mel_basis).float())
+
+    def mel_spectrogram(self, y):
+        magnitudes = self.stft_fn.transform(y)
+        mel_output = torch.matmul(self.mel_basis, magnitudes)
+        mel_output = torch.log(torch.clamp(mel_output, min=1e-5))
+        return mel_output
+
 
 class Dataset(Dataset):
     def __init__(self, audio_directory, metadata_directory):
@@ -59,6 +120,11 @@ class Dataset(Dataset):
         except Exception as e:
             return None, None, None, None # Return 4 Nones
 
+        # Normalize waveform the same way AudioLDM does (zero-mean, peak 0.5)
+        audio_array = audio_array - np.mean(audio_array)
+        audio_array = audio_array / (np.max(np.abs(audio_array)) + 1e-8)
+        audio_array = 0.5 * audio_array
+
         waveform = torch.from_numpy(audio_array).unsqueeze(0)
         sample_rate = 16000 #This is the default present in huggingface website for AudioLDM
         return waveform, sample_rate, genre_index, track_id
@@ -76,20 +142,19 @@ def preprocess_chunk(chunk_waveform):
         required_padding = required_sample_length - current_sample
         chunk_waveform = torch.nn.functional.pad(chunk_waveform, (0, required_padding))
 
-    mel = mel_spectrogram(chunk_waveform)
-    log_mel = torch.log(torch.clamp(mel, min=1e-5))
-    #Similar to AudioLDM
-    norm_mel = (log_mel - (-5.0)) / 5.0
+    # VAE expects raw log-mel (not mean/std-normalized values).
+    log_mel = mel_stft.mel_spectrogram(chunk_waveform)  # (1, 64, T)
 
-    no_of_frames = norm_mel.shape[2]
+    no_of_frames = log_mel.shape[2]
     if no_of_frames >=1024:
-        norm_mel = norm_mel[:, :, :1024]
+        log_mel = log_mel[:, :, :1024]
     else:
         required_padding = 1024 - no_of_frames
-        norm_mel = torch.nn.functional.pad(norm_mel, (0, required_padding))
+        log_mel = torch.nn.functional.pad(log_mel, (0, required_padding))
 
-    # Add Batch Dimension [1, 64, 1024] -> [1, 1, 64, 1024]
-    return norm_mel.unsqueeze(0)
+    # Diffusers AudioLDM pipeline uses (B, 1, T, F) = (B, 1, 1024, 64).
+    log_mel = log_mel.transpose(1, 2)  # (1, 1024, 64)
+    return log_mel.unsqueeze(0)        # (1, 1, 1024, 64)
 
 if __name__ == '__main__':
 
@@ -116,10 +181,9 @@ if __name__ == '__main__':
     #Setting the scaling factor from the vae's scaling factor from configs
     SCALING_FACTOR = variational_auto_encoder.config.scaling_factor
 
-    mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=16000, n_fft=1024, win_length=1024, hop_length=160,
-        f_min=0, f_max=8000, n_mels=64, power=1.0, 
-        norm="slaney", mel_scale="htk"
+    mel_stft = TacotronSTFT(
+        filter_length=1024, hop_length=160, win_length=1024,
+        n_mel_channels=64, sampling_rate=16000, mel_fmin=0, mel_fmax=8000,
     ).to(device)
 
     zero_point_one_second = 1600
@@ -135,7 +199,7 @@ if __name__ == '__main__':
     
                 for slice_index in range(3):
                     start_index = slice_index * 160000
-                    end_index = start_index + 16000
+                    end_index = start_index + 160000
             
                     # Minimum 9.9 seconds of audio required for safety
                     available_samples = total_samples - start_index
