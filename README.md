@@ -4,6 +4,10 @@ Genre-conditioned music generation using latent diffusion models. This project g
 ## Project layout
 - `/GC-LDM/data/preprocessing.py`  
   Build VAE latents from raw audio + metadata.
+- `/GC-LDM/scripts/build_latent_manifest.py`  
+  Build deterministic track-level splits and manifest/index for latent training.
+- `/GC-LDM/scripts/latent_dataset.py`  
+  Training dataset and dataloader utilities over manifest files.
 - `/GC-LDM/scripts/sanity_test.py`  
   Single-file reconstruction sanity check (audio -> log-mel -> VAE -> vocoder).
 - `/GC-LDM/scripts/decode_and_vocode.py`  
@@ -27,4 +31,29 @@ python scripts/decode_and_vocode.py \
   --outdir recon_audio \
   --max_files 1 \
   --use_hifigan
+```
+
+## Build train/val/test manifest for latents
+```bash
+python scripts/build_latent_manifest.py \
+  --latents_dir data/processed_latents \
+  --seed 42 \
+  --train_ratio 0.8 \
+  --val_ratio 0.1 \
+  --test_ratio 0.1
+```
+
+This generates:
+- `data/processed_latents/manifest.csv`
+- `data/processed_latents/splits.json`
+
+## Dataloader quick check
+```bash
+python - <<'PY'
+from scripts.latent_dataset import load_one_batch
+
+z, genre_id = load_one_batch("data/processed_latents/manifest.csv", split="train", batch_size=4)
+print(z.shape)        # expected: [B, 8, 256, 16]
+print(genre_id.shape) # expected: [B]
+PY
 ```
