@@ -7,6 +7,7 @@ data/.DS_Store
 # local audio/test artifacts
 sanity_test_output/
 recon_audio/
+runs/
 
 # local sample clips
 data/100/
