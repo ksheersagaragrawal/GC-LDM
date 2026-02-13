@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import torch
 import pandas as pd
 import numpy as np
@@ -158,9 +159,11 @@ def preprocess_chunk(chunk_waveform):
 
 if __name__ == '__main__':
 
+    data_dir = Path(__file__).resolve().parent
     audio_directory = "fma_small"
     metadata_directory = "fma_metadata"
-    output_directory = "processed_latents"
+    # Keep output location stable regardless of cwd.
+    output_directory = str(data_dir / "processed_latents")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("The device is {}".format(device))
