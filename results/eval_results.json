@@ -1,0 +1,10 @@
+{
+  "checkpoint": "/mnt/GC-LDM/runs/train_genre_diffusion/colab_run_01/checkpoints/latest.pt",
+  "manifest": "/mnt/GC-LDM/data/processed_latents/manifest.csv",
+  "genre_mapping": "/mnt/GC-LDM/data/processed_latents/genre_mapping.json",
+  "split": "val",
+  "seed": 42,
+  "device": "cpu",
+  "val_noise_mse": 0.2580046088853851,
+  "val_batches": 100
+}
