@@ -1,0 +1,23 @@
+{
+  "checkpoint": "/mnt/GC-LDM/runs/train_genre_diffusion/colab_run_01/checkpoints/latest.pt",
+  "genre_mapping": "/mnt/GC-LDM/data/processed_latents/genre_mapping.json",
+  "run_name": "sample_20260307_231139",
+  "cfg_scale": 7.0,
+  "num_steps": 20,
+  "genre_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "num_samples_per_genre": 10,
+  "seed": 1234,
+  "seed_stride": 1000,
+  "device": "cuda",
+  "export_audio": true,
+  "use_hifigan": true
+}
