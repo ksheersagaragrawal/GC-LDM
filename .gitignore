@@ -8,6 +8,7 @@ data/.DS_Store
 sanity_test_output/
 recon_audio/
 runs/
+results/
 
 # local sample clips
 data/100/
